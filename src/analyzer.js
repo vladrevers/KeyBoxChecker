@@ -482,19 +482,37 @@ export async function analyzeKeybox(xmlText, trustData, now = new Date()) {
         keyOut.privateKey.matchesLeafCertificate = bytesEqual(privateSpki, leafSpki);
         keyOut.privateKey.status = keyOut.privateKey.matchesLeafCertificate ? "pass" : "fail";
         if (!keyOut.privateKey.matchesLeafCertificate) keyOut.status = worse(keyOut.status, "fail");
+        keyOut.root = classifyRoot(certs.at(-1), trustRoots);
 
         const timeChecks = certs.map((cert, idx) => {
           const role = idx === 0 ? "leaf" : idx === certs.length - 1 ? "root" : "intermediate";
+          const label = `Certificate #${idx + 1} (${role})`;
           const nb = new Date(cert.notBefore);
           const na = new Date(cert.notAfter);
           let status = "pass";
-          let message = `Certificate #${idx + 1} (${role}) within validity period`;
-          if (now < nb) { status = "fail"; message = `Certificate #${idx + 1} (${role}) not yet valid`; }
-          if (now > na) { status = "fail"; message = `Certificate #${idx + 1} (${role}) expired`; }
+          let message = `${label} within validity period`;
+          if (now < nb) {
+            status = "fail";
+            message = `${label} not yet valid (starts ${cert.notBefore.slice(0, 10)})`;
+          }
+          if (now > na) {
+            const expiredOn = cert.notAfter.slice(0, 10);
+            const daysAgo = Math.floor((now - na) / 86400000);
+            if (role === "root" && keyOut.root.recognized) {
+              status = "warn";
+              message = `${label} expired on ${expiredOn} (${daysAgo} days ago); recognized Google root, expiry may be ignored`;
+            } else {
+              status = "fail";
+              message = `${label} expired on ${expiredOn} (${daysAgo} days ago)`;
+            }
+          }
           return { status, message, serialHex: cert.serialHex };
         });
         keyOut.chain.checks.push(...timeChecks);
-        if (timeChecks.some(c => c.status === "fail")) keyOut.status = worse(keyOut.status, "fail");
+        for (const check of timeChecks) {
+          if (check.status !== "pass") keyOut.status = worse(keyOut.status, check.status);
+          if (check.status === "warn") keyOut.warnings.push(check.message);
+        }
 
         let chainValid = true;
         for (let i = 0; i < certs.length - 1; i++) {
@@ -512,8 +530,6 @@ export async function analyzeKeybox(xmlText, trustData, now = new Date()) {
         keyOut.chain.valid = chainValid;
         if (!chainValid) keyOut.status = worse(keyOut.status, "fail");
 
-        const rootCert = certs.at(-1);
-        keyOut.root = classifyRoot(rootCert, trustRoots);
         if (!keyOut.root.recognized) {
           keyOut.status = worse(keyOut.status, "warn");
           keyOut.warnings.push("Signer is not a production Google hardware attestation root.");
