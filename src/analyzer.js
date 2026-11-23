@@ -485,6 +485,8 @@ export async function analyzeKeybox(xmlText, trustData, now = new Date()) {
 
         const rootCert = certs.at(-1);
         keyOut.root = classifyRoot(rootCert, trustRoots);
+        // Factory-provisioned chains (unlike RKP) have a serialNumber in the subject of the certificate issued by the root.
+        const factoryProvisioned = /(^|, )serialNumber=/.test(certs.at(-2)?.subject ?? "");
 
         const timeChecks = certs.map((cert, idx) => {
           const role = idx === 0 ? "leaf" : idx === certs.length - 1 ? "root" : "intermediate";
@@ -494,7 +496,7 @@ export async function analyzeKeybox(xmlText, trustData, now = new Date()) {
           let message = `Certificate #${idx + 1} (${role}) within validity period`;
           if (now < nb) { status = "fail"; message = `Certificate #${idx + 1} (${role}) not yet valid`; }
           if (now > na) {
-            const warnOnly = role === "root" && keyOut.root.recognized;
+            const warnOnly = keyOut.root.recognized && (role === "root" || factoryProvisioned);
             status = warnOnly ? "warn" : "fail";
             message = `Certificate #${idx + 1} (${role}) expired${warnOnly ? ", but verifiers may ignore that" : ""}`;
           }
